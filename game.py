@@ -381,9 +381,14 @@ class Board:
         tuples_list.append((0, 0, 0))  # add a pass move
 
       #   add tuples of form (piece, 0, 0) for saving opponent's piece 
-      #  opponent_pieces = [p for p in self.pieces if p.player != self.current_player and p.tile and p.tile.type == 'field']
-      #  for piece in opponent_pieces:
-      #          tuples_list.append(((piece.player, piece.number), 0, 0))
+   #     if self.game_stages[self.current_player] != 'opening' and all(not die.used for die in self.dice) and not captured_pieces:
+    #        opponent_pieces = [
+     #           p for p in self.pieces
+      #          if p.player != self.current_player and p.tile and p.tile.type == 'field'
+       #     ]
+        #    for piece in opponent_pieces:
+         #       tuples_list.append(((piece.player, piece.number), 0, 0))
+
   
         return tuples_list
     
@@ -620,8 +625,7 @@ class Board:
 # complete logic for saving opponent's piece, here and in game.js
 # in two-player game, a player can offer to end the game with a proposed score
 # bugs: agent is still trying to save pieces when one piece away from midgame!
-# bug where piece on goal is captured en route when moving on both dice
-# rare bug where agent tries to move same piece twiceon first move against shortest-move rule: may have been fixed by changing if sum(not die.used for die in self.dice) == 1 to == 2 in undo_last_move
+# bug where piece on goal is captured en route when moving on both dice (should be fixed now in game.js)
+# rare bug where agent tries to move same piece twice on first move against shortest-move rule: may have been fixed by changing if sum(not die.used for die in self.dice) == 1 to == 2 in undo_last_move
 # still need to fix bug where agent tries to save an unnumbered piece with a too-low roll in endgame
-# in endgame, can turn a numbered piece into unnumbered (under certain conditions / a certain # of times)?
-# or, once all other pieces are saved, numbered pieces on their goals lose their number? or one per turn does? or can choose one per turn?
+# if a player is in the endgame and have only numbered pieces left unsaved, and they pass a turn using neither die, then the highest numbered unsaved piece becomes unnumbered

@@ -1273,7 +1273,7 @@ class Game {
         const allIntermediateTiles = [...intermediateTiles1, ...intermediateTiles2];
     
         // Check if there's an opponent piece on any of the intermediate tiles and capture only one piece
-        const captureConditionsMet = (tile) => tile && tile.pieces.some(p => p.player !== piece.player) && tile.pieces.length === 1;
+        const captureConditionsMet = (tile) => tile && tile.type === 'field'    && tile.pieces.some(p => p.player !== piece.player) && tile.pieces.length === 1;
     
         for (const tile of allIntermediateTiles) {
             if (captureConditionsMet(tile)) {
