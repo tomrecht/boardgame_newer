@@ -39,11 +39,12 @@ const scoreTracker = {
 let extraMoveRequested = false;
 
 class Piece {
-    constructor(scene, game, color, number, x, y, rack = null) {
+    constructor(scene, game, color, number, x, y, rack = null, id) {
         this.scene = scene;
         this.color = color;
         this.game = game;
         this.number = number;
+        this.id = id;
         this.player = color === 0xffffff ? 'white' : 'black';
         this.originalColor = color;
         this.textColor = color === 0xffffff ? 0x000000 : 0xffffff;
@@ -309,9 +310,9 @@ class Piece {
         if (!this.currentTile || this.currentTile.type !== 'save') {
             return false;
         }
-        if (this.number > 6) {
+        if (this.number === 0) { // Unnumbered pieces can be saved on any save tile
             return true;
-        } else {
+        } else { // Numbered pieces must be saved on a tile matching their number
             return this.currentTile.number === this.number;
         }
     }
@@ -335,7 +336,7 @@ class Piece {
             let dieToUse = dice.find(die => die.value === saveTileNumber);
 
 
-            if (!dieToUse && this.number > 6) {
+            if (!dieToUse && this.number === 0) {
                 // If player is in the endgame they can save unnumbered pieces with higher die rolls
                 const isEndgame = player.getGamePhase() === 'endgame';
                 console.log(`Is player ${player.name} in endgame: ${isEndgame}`);
@@ -383,8 +384,8 @@ class Piece {
 
         this.circle.setStrokeStyle(2, this.borderColor);
 
-        if (this.number <= 6 || DEBUG_MODE) {
-            this.text = this.scene.add.text(this.x, this.y, this.number, {
+        if ((this.number >= 1 && this.number <= 6) || (this.number === 0 && DEBUG_MODE)) {
+            this.text = this.scene.add.text(this.x, this.y, this.number.toString(), { // Ensure .toString() is used if number can be 0
                 fontSize: `${this.radius * 1.5}px`,
                 color: `#${this.textColor.toString(16)}`
             }).setOrigin(0.5, 0.5);
@@ -413,25 +414,37 @@ class Tile {
             this.reachableColor = null;
             this.lastClickTime = null;
     
-            this.lineColor = 0x000000;
             this.graphics = scene.add.graphics();
 
-            switch (type) {
-                case "home":
-                    this.fillColor = 0xffff00;
-                    break;
-                case "save":
-                    this.fillColor = 0x00ff00;
-                    break;
-                case "nogo":
-                    this.fillColor = ring === 7 ? 0xffffff : 0x000000; 
-                    this.lineColor = ring === 7 ? 0xffffff : 0x000000; // No border for 7th ring nogo tiles
-                    break;
-                case "field":
-                    this.fillColor = 0xffffff;
-                    break;
-            }
+            // Default colors set before specific type logic
+            this.fillColor = 0xcccccc; // Fallback color for unhandled types
+            this.lineColor = 0x000000; // Default border for most tiles
 
+            if (type === "home") {
+                this.fillColor = 0xffff00; // Yellow
+            } else if (type === "save") {
+                this.fillColor = 0x00ff00; // Green
+            } else if (type === "field") {
+                this.fillColor = 0xffffff; // White
+                // lineColor remains black (default)
+            } else if (type === "nogo") {
+                if (ring === 6 && (sector === 1 || sector === 5 || sector === 9)) {
+                    // Specific Ring 6 nogo tiles: white fill, white border
+                    this.fillColor = 0xffffff; 
+                    this.lineColor = 0xffffff; 
+                } else if (ring === 7) { 
+                    // All nogo tiles in Ring 7
+                    // Should be white fill, white border
+                    this.fillColor = 0xffffff;
+                    this.lineColor = 0xffffff;
+                } else { 
+                    // Default for other nogo tiles (e.g., in rings 1-5, and other nogo tiles in ring 6)
+                    // Black fill, black border
+                    this.fillColor = 0x000000; 
+                    this.lineColor = 0x000000; 
+                }
+            }
+            // Ensure this.drawTile() is called after these color assignments at the end of the constructor.
             this.drawTile();
 
         }
@@ -851,6 +864,7 @@ class Game {
 
         // Create tiles and pieces
         this.createTiles({ x: CENTER_X, y: CENTER_Y }, 7, 12, HOME_TILE_RADIUS, TILE_RADIUS_STEP);
+        this.nextPieceId = 1;
         this.createPieces();
 
         // Roll dice and update movable pieces
@@ -873,8 +887,10 @@ class Game {
         let whitePieces = [];
         let blackPieces = [];
         for (let i = 1; i <= TOTAL_PIECES; i++) {
-            whitePieces.push(new Piece(this.scene, this, 0xffffff, i, 0, 0, this.whiteUnenteredRack));
-            blackPieces.push(new Piece(this.scene, this, 0x000000, i, 0, 0, this.blackUnenteredRack));
+            const whitePieceId = this.nextPieceId++;
+            whitePieces.push(new Piece(this.scene, this, 0xffffff, i, 0, 0, this.whiteUnenteredRack, whitePieceId));
+            const blackPieceId = this.nextPieceId++;
+            blackPieces.push(new Piece(this.scene, this, 0x000000, i, 0, 0, this.blackUnenteredRack, blackPieceId));
         }
 
         whitePieces = Phaser.Utils.Array.Shuffle(whitePieces);
@@ -1123,46 +1139,67 @@ class Game {
     
     getReachableTilesByDice(piece) {
         if (!piece) return null;
-    
-        const dice = this.dice.filter(die => !die.used);
-        const diceValues = dice.map(die => die.value);
-    
-        if (diceValues.length === 0) {
-            console.log('No available dice');
-            return null; // No available dice
-        }
-    
-        const reachableByFirstDie = this.getReachableTiles(piece.currentTile, diceValues[0]);
-        const reachableBySecondDie = diceValues.length > 1 ? this.getReachableTiles(piece.currentTile, diceValues[1]) : [];
-        let reachableBySum = this.getReachableTiles(piece.currentTile, diceValues[0] + (diceValues[1] || 0));
-    
-        const homeTile = this.tiles.find(tile => tile.type === 'home');
-        if (homeTile.pieces.filter(p => p.color === piece.color).length > 1) {
-            console.log('Player has more than one captured piece');
-            reachableBySum = [];
+
+        let rbfd = []; // reachableByFirstDie
+        let rbsd = []; // reachableBySecondDie
+        let rbs = [];  // reachableBySum
+
+        // Determine the starting tile for calculations: piece's current tile or home if racked
+        const startTile = piece.currentTile || this.tiles.find(tile => tile.type === 'home');
+
+        const die1 = this.dice[0];
+        const die2 = this.dice[1];
+        const homeTile = this.tiles.find(tile => tile.type === 'home'); // For sum move validation
+
+        if (!die1.used && !die2.used) {
+            // Both dice are available
+            rbfd = this.getReachableTiles(startTile, die1.value);
+            rbsd = this.getReachableTiles(startTile, die2.value);
+            rbs = this.getReachableTiles(startTile, die1.value + die2.value);
+            // If player has more than one captured piece on the home tile, sum move is invalid
+            if (startTile === homeTile && homeTile.pieces.filter(p => p.color === piece.color && p.currentTile === homeTile).length > 1) {
+                console.log('Player has more than one captured piece on home; sum move invalid from home.');
+                rbs = [];
+            }
+        } else if (!die1.used && die2.used) {
+            // Only first die is available
+            rbfd = this.getReachableTiles(startTile, die1.value);
+            // rbsd and rbs remain empty as die2 is used
+        } else if (die1.used && !die2.used) {
+            // Only second die is available
+            rbsd = this.getReachableTiles(startTile, die2.value);
+            // rbfd and rbs remain empty as die1 is used
+        } else { 
+            // Both dice used, or invalid state - no moves possible
+            return { reachableByFirstDie: [], reachableBySecondDie: [], reachableBySum: [] };
         }
 
-        // Filter reachableByFirstDie and reachableBySecondDie based on piece.reachableTiles
-        if (piece.reachableTiles)  {
+        // Filtering logic for AI moves:
+        // This section applies if `piece.reachableTiles.reachableBySum` was provided by the server,
+        // typically when the AI is making the first part of a two-part move, and the server has
+        // already determined the valid final destinations for the sum of both dice.
+        // This ensures client-side highlighting matches the server-validated path.
+        if (piece.reachableTiles && piece.reachableTiles.reachableBySum) {
+            const serverAllowedSumTiles = new Set(
+                piece.reachableTiles.reachableBySum.map(tData => 
+                    this.tiles.find(tile => tile.ring === tData.ring && tile.sector === tData.sector)
+                ).filter(Boolean) // Ensure only valid tile objects are included
+            );
 
-            const reachableTilesSet = new Set(piece.reachableTiles.reachableBySum); // Assuming each tile has a unique id
-    
-            const filterTiles = (tiles) => tiles.filter(tile => reachableTilesSet.has(tile));
-    
-            const filteredReachableByFirstDie = filterTiles(reachableByFirstDie);
-            const filteredReachableBySecondDie = filterTiles(reachableBySecondDie);
-            const filteredReachableBySum = filterTiles(reachableBySum);
-    
-            return {
-                reachableByFirstDie: filteredReachableByFirstDie,
-                reachableBySecondDie: filteredReachableBySecondDie,
-                reachableBySum: filteredReachableBySum
-            };
+            // Filter the initially calculated reachable tiles against what the server allows for the sum.
+            rbfd = rbfd.filter(tile => serverAllowedSumTiles.has(tile));
+            rbsd = rbsd.filter(tile => serverAllowedSumTiles.has(tile));
+            // If the server provides reachableBySum, it's the definitive list for sum moves.
+            // However, for highlighting, we're interested in how rbfd and rbsd contribute to *any* sum move.
+            // The original rbs (calculated when both dice are free) should also be filtered.
+            // If only one die was free, rbs is empty, and this filtering has no effect on it.
+            rbs = rbs.filter(tile => serverAllowedSumTiles.has(tile));
         }
+        
         return {
-            reachableByFirstDie: reachableByFirstDie,
-            reachableBySecondDie: reachableBySecondDie,
-            reachableBySum: reachableBySum
+            reachableByFirstDie: rbfd,
+            reachableBySecondDie: rbsd,
+            reachableBySum: rbs
         };
     }
     
@@ -1872,12 +1909,25 @@ class MainGameScene extends Phaser.Scene {
     }
 
     updateScoreText() {
-        const averageScore = calculateAverageScore();
+        let averageScoreLine = 'Average Lead: N/A'; // Default for no games played
+
+        if (scoreTracker.games_played > 0) {
+            if (scoreTracker.total_score > 0) {
+                const whiteAvg = (scoreTracker.total_score / scoreTracker.games_played).toFixed(2);
+                averageScoreLine = `Average Lead: White ${whiteAvg}`;
+            } else if (scoreTracker.total_score < 0) {
+                const blackAvg = (Math.abs(scoreTracker.total_score) / scoreTracker.games_played).toFixed(2);
+                averageScoreLine = `Average Lead: Black ${blackAvg}`;
+            } else { // total_score === 0
+                averageScoreLine = 'Average Lead: Tie';
+            }
+        }
+
         this.scoreText.setText(
             `Games Played: ${scoreTracker.games_played}\n` +
             `White Wins: ${scoreTracker.white_wins}\n` +
             `Black Wins: ${scoreTracker.black_wins}\n` +
-            `Average Score: ${averageScore.toFixed(2)}`
+            averageScoreLine // Use the new line
         );
     }
 
@@ -2202,19 +2252,14 @@ function applyMove(move) {
         return;
     }
 
-    const pieceColorNumber = move[0];
+    const pieceId = move[0];
     const targetRingSector = move[1];
     const dieRoll = move[2];
 
-    // Check for the (0, 0, 0) tuple
-    if (pieceColorNumber === 0 && targetRingSector === 0 && dieRoll === 0) {
-        console.log('Received (0, 0, 0) tuple, switching turn.');
+    // Check for the (0, 0, 0) tuple (pass move)
+    if (pieceId === 0 && targetRingSector === 0 && dieRoll === 0) {
+        console.log('Received (0, 0, 0) tuple for pass move, switching turn.');
         game.switchTurn();
-        return;
-    }        
-
-    if (!Array.isArray(pieceColorNumber) || pieceColorNumber.length !== 2) {
-        console.error('Invalid piece color and number format:', pieceColorNumber);
         return;
     }
 
@@ -2223,7 +2268,7 @@ function applyMove(move) {
         return;
     }
 
-    const piece = findPieceByColorAndNumber(pieceColorNumber[0], pieceColorNumber[1]);
+    const piece = findPieceById(pieceId);
     const targetTile = targetRingSector === 'save' ? 'save' : findTileByRingAndSector(targetRingSector[0], targetRingSector[1]);
 
     if (piece && targetTile) {
@@ -2302,31 +2347,31 @@ function applyMovePair(movePair) {
             return;
         }
 
-        const pieceColorNumber = move[0];
+    const pieceId = move[0];
         const targetRingSector = move[1];
         const dieRoll = move[2];
 
         // Check for the (0, 0, 0) tuple (pass move)
-        if (pieceColorNumber === 0 && targetRingSector === 0 && dieRoll === 0) {
-            console.log('Received (0, 0, 0) tuple, switching turn.');
+    if (pieceId === 0 && targetRingSector === 0 && dieRoll === 0) {
+        console.log('Received (0, 0, 0) tuple for pass move, switching turn.');
             game.switchTurn();
             return;
         }
 
-        if (!Array.isArray(pieceColorNumber) || pieceColorNumber.length !== 2) {
-            console.error('Invalid piece color and number format:', pieceColorNumber);
-            return;
-        }
-
-        const piece = findPieceByColorAndNumber(pieceColorNumber[0], pieceColorNumber[1]);
+    const piece = findPieceById(pieceId);
         // Check for saving opponent's piece
 
-        if (targetRingSector === 0 && dieRoll === 0) {
-            console.log('Saving opponent piece', pieceColorNumber);
-            piece.save();
-            console.log(`Piece ${pieceColorNumber[0]} ${pieceColorNumber[1]} saved`);
-
+    if (targetRingSector === 0 && dieRoll === 0) { // This condition implies saving an opponent's piece by its ID
+        console.log('Saving opponent piece with ID:', pieceId);
+        if (piece) {
+            piece.save(); // Assuming 'save' here means moving to their saved rack
+            console.log(`Opponent piece ${piece.player} ${piece.number} (id: ${pieceId}) saved by agent.`);
             piece.isSelected = false;
+        } else {
+            console.error('Could not find opponent piece with ID:', pieceId, 'to save.');
+            game.switchTurn(); // Or handle error appropriately
+            return;
+        }
             piece.updateColor();
             
             callback();
@@ -2356,7 +2401,7 @@ function applyMovePair(movePair) {
                     
                     callback();
                 } else if (game.movePiece(piece, targetTile, true)) {
-                    console.log(`Piece ${pieceColorNumber[0]} ${pieceColorNumber[1]} moved to ring ${targetRingSector[0]}, sector ${targetRingSector[1]}`);
+                    console.log(`Piece ${piece.player} ${piece.number} (id: ${pieceId}) moved to ring ${targetRingSector[0]}, sector ${targetRingSector[1]}`);
                     piece.reachableTiles = game.getReachableTilesByDice(piece); // Update reachable tiles
 
                     piece.isSelected = false;
@@ -2396,29 +2441,15 @@ function applyMovePair(movePair) {
 
 
 
-function findPieceByColorAndNumber(color, number) {
-    // Implement this function to find the piece by its color and number
-    return gameInstance.scene.scenes[0].game.pieces.find(piece => piece.player === color && piece.number === number);
+function findPieceById(id) {
+    // Implement this function to find the piece by its id
+    return gameInstance.scene.scenes[0].game.pieces.find(piece => piece.id === id);
 }
 
 function findTileByRingAndSector(ring, sector) {
     // Implement this function to find the tile by its ring and sector
     return gameInstance.scene.scenes[0].game.tiles.find(tile => tile.ring === ring && tile.sector === sector);
 }
-
-
-
-
-
-function findPieceById(id) {
-    const game = gameInstance.scene.scenes[0].game;
-    return game.pieces.find(piece => {
-        const pieceId = piece.number + (piece.player === 'black' ? TOTAL_PIECES : 0);
-        return pieceId === id;
-    });
-}
-
-
 
 function getGameState(game) {
     console.log('Getting game state details');
@@ -2431,25 +2462,30 @@ function getGameState(game) {
         racks: {
             whiteUnentered: game.whiteUnenteredRack.pieces.map(piece => ({
                 color: piece.player,
-                number: piece.number
+                number: piece.number,
+                id: piece.id
             })),
             whiteSaved: game.whiteSavedRack.pieces.map(piece => ({
                 color: piece.player,
-                number: piece.number
+                number: piece.number,
+                id: piece.id
             })),
             blackUnentered: game.blackUnenteredRack.pieces.map(piece => ({
                 color: piece.player,
-                number: piece.number
+                number: piece.number,
+                id: piece.id
             })),
             blackSaved: game.blackSavedRack.pieces.map(piece => ({
                 color: piece.player,
-                number: piece.number
+                number: piece.number,
+                id: piece.id
             })),
         },
         boardPieces: game.pieces.filter(piece => piece.currentTile).map(piece => {
             const pieceDetails = {
                 color: piece.player,
                 number: piece.number,
+                id: piece.id,
                 tile: {
                     ring: piece.currentTile.ring,
                     sector: piece.currentTile.sector

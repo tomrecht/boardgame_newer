@@ -15,10 +15,11 @@ class Die:
         self.used = False
 
 class Piece:
-    def __init__(self, player, number, board):
+    def __init__(self, player, number, board, id):
         self.player = player
         self.number = number
         self.board = board
+        self.id = id
         self.tile = None
         self.rack = None
         self.reachable_tiles = None
@@ -26,15 +27,17 @@ class Piece:
         self.index = None
 
     def __repr__(self):
-        return f'{self.player}({self.number})'
+        return f'{self.player}({self.number}, id:{self.id})'
     
     def can_be_saved(self, already_saved_counts_as_saveable=True):
-        if self.rack and self.rack == self.board.white_saved or self.rack == self.board.black_saved:
+        if self.rack and (self.rack == self.board.white_saved or self.rack == self.board.black_saved):
             return True if already_saved_counts_as_saveable else False
         
         tile = self.tile
         if tile and tile.type == 'save':
-            if self.number > 6 or (self.number == tile.number):
+            # Unnumbered pieces (number == 0) can be saved on any save tile.
+            # Numbered pieces (number > 0) must be saved on a tile matching their number.
+            if self.number == 0 or (self.number == tile.number):
                 return True
         return False
 
@@ -74,6 +77,7 @@ class Board:
         self.black_saved = []
         self.assign_tile_indices()
         self.game_stages = {'white': 'opening', 'black': 'opening'}
+        self.next_piece_id = 1
         self.initialize_pieces()
         self.firstMove = None
         self.moves = []
@@ -101,6 +105,7 @@ class Board:
         self.pieces.clear()
         for tile in self.tiles:
             tile.pieces.clear()
+        self.next_piece_id = 1
 
     def add_tile(self, tile):
         self.tiles.append(tile)
@@ -112,7 +117,11 @@ class Board:
 
     def initialize_pieces(self):
         for player in self.players:
-            pieces = [Piece(player, i + 1, self) for i in range(NUM_PIECES)]
+            pieces = []
+            for i in range(NUM_PIECES):
+                piece_id = self.next_piece_id
+                self.next_piece_id += 1
+                pieces.append(Piece(player, i + 1, self, piece_id))
             random.shuffle(pieces)  # Shuffle the pieces randomly
 
             if player == 'white':
@@ -162,7 +171,8 @@ class Board:
         def place_pieces_in_rack(rack, pieces_details, player):
             rack.clear()
             for piece_details in pieces_details:
-                piece = Piece(player, piece_details['number'], self)
+                piece_id = piece_details['id']
+                piece = Piece(player, piece_details['number'], self, piece_id)
                 self.pieces.append(piece)
                 rack.append(piece)
                 piece.rack = rack
@@ -178,10 +188,11 @@ class Board:
         for piece_details in game_state_details['boardPieces']:
             player = piece_details['color']
             number = piece_details['number']
+            piece_id = piece_details['id']
             ring = piece_details['tile']['ring']
             sector = piece_details['tile']['sector']
             tile = self.get_tile(ring, sector)
-            piece = Piece(player, number, self)
+            piece = Piece(player, number, self, piece_id)
             piece.tile = tile
             tile.pieces.append(piece)
             self.pieces.append(piece)
@@ -194,6 +205,7 @@ class Board:
 
         self.assign_piece_indices()
         self.game_stages[self.current_player] = self.get_game_stage(self.current_player)
+        self.next_piece_id = max(self.next_piece_id, max(p.id for p in self.pieces) + 1 if self.pieces else 1)
 
     def assign_tile_indices(self):
         for i in range(len(self.tiles)):
@@ -256,28 +268,62 @@ class Board:
 
     def get_saving_die(self, piece):
         if self.game_stages[piece.player] == 'opening':
-            return False  # can't save pieces in the opening
+            return False  # Can't save pieces in the opening
 
         current_tile = piece.tile
-        if current_tile and current_tile.type == 'save' and (piece.number > 6 or piece.number == current_tile.number):
-            if self.game_stages[piece.player] == 'endgame':
-                if piece.number > 6:
-                    highest_occupied_goal_number = max((tile.number for tile in self.tiles if tile.type == 'save' and len(tile.pieces) > 0 and any(p.player == piece.player for p in tile.pieces)), default=0)
-                    valid_dice = [die for die in self.dice if (not die.used) and die.number == current_tile.number or (die.number > current_tile.number and current_tile.number >= highest_occupied_goal_number)]
-                else:
-                    valid_dice = [die for die in self.dice if (not die.used) and die.number == current_tile.number]
-            else:
-                valid_dice = [die for die in self.dice if (not die.used) and die.number == current_tile.number]
+        if not (current_tile and current_tile.type == 'save'):
+            return False # Piece is not on a save tile
 
-            if valid_dice:
-                matching_die = next((die for die in valid_dice if die.number == current_tile.number), None)
-                if matching_die:
-                    die = matching_die
-                else:
-                    die = max(valid_dice, key=lambda die: die.number)
-                return die.number
-            else:
-                return False  # The piece cannot be saved with the current dice rolls
+        # Condition for piece to be saveable from this tile (ignoring dice)
+        # Numbered piece must match tile number. Unnumbered (0) can be on any save tile.
+        if not (piece.number == 0 or piece.number == current_tile.number):
+            return False
+
+        valid_dice_options = []
+        player_stage = self.game_stages[piece.player]
+
+        if player_stage == 'endgame' and piece.number == 0:
+            # Unnumbered piece in endgame: special logic
+            highest_occupied_goal_number = 0
+            # Correctly find the max number of a save tile that has any of the current player's pieces on it.
+            player_pieces_on_save_tiles = [
+                t.number for t in self.tiles 
+                if t.type == 'save' and t.pieces and any(p.player == piece.player for p in t.pieces) and t.number is not None
+            ]
+            if player_pieces_on_save_tiles:
+                highest_occupied_goal_number = max(player_pieces_on_save_tiles)
+            
+            valid_dice_options = [
+                die for die in self.dice if not die.used and
+                (die.number == current_tile.number or
+                 (die.number > current_tile.number and current_tile.number >= highest_occupied_goal_number))
+            ]
+        else:
+            # Standard logic for:
+            # 1. Numbered pieces in any stage (endgame or midgame)
+            # 2. Unnumbered pieces in midgame
+            valid_dice_options = [
+                die for die in self.dice if not die.used and die.number == current_tile.number
+            ]
+
+        if not valid_dice_options:
+            return False
+
+        # From valid dice, select the one to use
+        # Prefer exact match
+        exact_match_die = next((die for die in valid_dice_options if die.number == current_tile.number), None)
+        if exact_match_die:
+            return exact_match_die.number
+        
+        # If no exact match, for unnumbered pieces in endgame, a higher roll might be permissible and available
+        if player_stage == 'endgame' and piece.number == 0:
+            # This implies valid_dice_options contains only higher rolls (since exact_match_die was None)
+            # Filter for dice that are strictly greater if that's the only option.
+            higher_rolls = [die.number for die in valid_dice_options if die.number > current_tile.number]
+            if higher_rolls:
+                return max(higher_rolls) # Use the highest available valid die roll
+
+        return False # Should not be reached if valid_dice_options was populated and logic is correct for selection
 
     def get_reachable_tiles(self, start_tile, steps):
         queue = deque([(start_tile, 0)])  # Start with the current tile and 0 steps taken
@@ -372,26 +418,27 @@ class Board:
                     for destination in destinations:
                         
                         if destination == 'save':
-                            tuples_list.append(((piece.player, piece.number), destination, roll))
+                            tuples_list.append((piece.id, destination, roll))
                         elif mask_offgoals and piece.can_be_saved() and (piece.number <=6 or roll != 4 or destination.type != 'save'):
                             continue   # don't include offgoal moves
                         else:
-                            tuples_list.append(((piece.player, piece.number), (destination.ring, destination.pos), roll))
+                            tuples_list.append((piece.id, (destination.ring, destination.pos), roll))
 
         tuples_list.append((0, 0, 0))  # add a pass move
 
       #   add tuples of form (piece, 0, 0) for saving opponent's piece 
       #  opponent_pieces = [p for p in self.pieces if p.player != self.current_player and p.tile and p.tile.type == 'field']
       #  for piece in opponent_pieces:
-      #          tuples_list.append(((piece.player, piece.number), 0, 0))
+      #          tuples_list.append((piece.id, 0, 0))
   
         return tuples_list
     
-    def save_move(self, move, origin_tile = None, origin_rack = None, captured_piece = None):
-        piece_id, destination, roll = move
+    def save_move(self, piece_obj, original_move_tuple, origin_tile = None, origin_rack = None, captured_piece = None):
+        _, destination, roll = original_move_tuple
 
         move_to_save = dict()
-        move_to_save['piece'] = next((p for p in self.pieces if (p.player, p.number) == piece_id), None)
+        move_to_save['piece'] = piece_obj
+        move_to_save['piece_id'] = piece_obj.id # Store ID for potential future use, though undo uses the object
         move_to_save['origin_tile'] = origin_tile
         move_to_save['origin_rack'] = origin_rack
         move_to_save['destination'] = destination
@@ -465,14 +512,37 @@ class Board:
 
         # Handle the pass move (0, 0, 0)
         if move == (0, 0, 0):
+            player_to_check = self.current_player
+            # Endgame rule: If player is in endgame, all their unsaved pieces are numbered,
+            # and they pass, their highest numbered unsaved piece becomes unnumbered.
+            if self.game_stages[player_to_check] == 'endgame':
+                player_saved_rack = self.white_saved if player_to_check == 'white' else self.black_saved
+                unsaved_pieces = [
+                    p for p in self.pieces 
+                    if p.player == player_to_check and p.rack != player_saved_rack
+                ]
+
+                if unsaved_pieces and all(p.number != 0 for p in unsaved_pieces):
+                    highest_numbered_piece = max(unsaved_pieces, key=lambda p: p.number, default=None)
+                    if highest_numbered_piece:
+                        print(f"Endgame rule: Piece {highest_numbered_piece.id} (number {highest_numbered_piece.number}) for player {player_to_check} became unnumbered (number 0).")
+                        highest_numbered_piece.number = 0
+                        # After a piece becomes unnumbered, the game stage might change if this was the last piece
+                        # preventing the endgame, or if it now makes all pieces saveable in a new way.
+                        # Re-evaluate game stage for the current player.
+                        self.game_stages[player_to_check] = self.get_game_stage(player_to_check)
+
+
             self.firstMove = None  # Reset first move for the next turn
-            self.current_player = 'white' if self.current_player == 'black' else 'black'
+            # The turn switch should happen after applying the endgame rule for the passing player
+            if switch_turn: # apply_move is called with switch_turn=True by default by the agent.
+                self.current_player = 'white' if self.current_player == 'black' else 'black'
             return
 
         # Find the piece object
-        piece = next((p for p in self.pieces if (p.player, p.number) == piece_id), None)
+        piece = next((p for p in self.pieces if p.id == piece_id), None)
         if not piece:
-            print(f"No piece found for {piece_id}")
+            print(f"No piece found for piece_id {piece_id}")
             return
 
         # Handle saving opponent's piece
@@ -534,7 +604,7 @@ class Board:
 
         self.game_stages[self.current_player] = self.get_game_stage(self.current_player)
 
-        self.save_move(move, origin_tile, origin_rack, captured_piece)
+        self.save_move(piece, move, origin_tile, origin_rack, captured_piece)
 
         # Switch to the next player if both dice are used
         if switch_turn and all(die.used for die in self.dice):
@@ -561,7 +631,8 @@ class Board:
             for neighbor in current_tile.neighbors:
                 if neighbor not in visited:
                     visited.add(neighbor)
-                    if neighbor.type == 'save' and (piece.number > 6 or piece.number == neighbor.number):
+                    # Unnumbered pieces (0) can use any save tile. Numbered pieces must match.
+                    if neighbor.type == 'save' and (piece.number == 0 or piece.number == neighbor.number):
                         return distance + 1  # Found a goal tile from which the piece can be saved
                     if neighbor.type not in ['nogo', 'home'] and not neighbor.is_blocked(piece.player):
                         queue.append((neighbor, distance + 1))
@@ -583,13 +654,14 @@ class Board:
                 reachable_tiles = self.get_reachable_tiles(piece.tile, roll)
                 
                 # Check if the piece can reach its goal with this roll
-                if piece.number < 7:  # Numbered piece must reach its specific goal
+                if piece.number >= 1 and piece.number <= 6:  # Numbered piece (1-6) must reach its specific goal
                     matching_goal = next((tile for tile in reachable_tiles if tile.type == 'save' and tile.number == piece.number), None)
                     if matching_goal:
                         reachable_counts[roll - 1] += 1
-                else:  # Unnumbered piece can reach any goal
+                elif piece.number == 0:  # Unnumbered piece (0) can reach any save tile
                     if any(tile.type == 'save' for tile in reachable_tiles):
                         reachable_counts[roll - 1] += 1
+                # Pieces with other numbers (e.g. >6 if they somehow exist) are ignored by this logic.
 
         return reachable_counts
 
