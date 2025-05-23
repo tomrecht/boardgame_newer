@@ -429,12 +429,11 @@ class Tile {
                 // lineColor remains black (default)
             } else if (type === "nogo") {
                 if (ring === 6 && (sector === 1 || sector === 5 || sector === 9)) {
-                    // Specific Ring 6 nogo tiles: white fill, white border
+                    // Specific Ring 6 nogo tiles: white fill, WHITE border (invisible on white background)
                     this.fillColor = 0xffffff; 
-                    this.lineColor = 0xffffff; 
+                    this.lineColor = 0xffffff; // Changed back to white
                 } else if (ring === 7) { 
-                    // All nogo tiles in Ring 7
-                    // Should be white fill, white border
+                    // Ring 7 nogo tiles: white fill, white border (no change here)
                     this.fillColor = 0xffffff;
                     this.lineColor = 0xffffff;
                 } else { 
@@ -886,11 +885,28 @@ class Game {
     createPieces() {
         let whitePieces = [];
         let blackPieces = [];
-        for (let i = 1; i <= TOTAL_PIECES; i++) {
+        const NUM_NUMBERED_PIECES = 6;
+
+        // Create white pieces
+        for (let i = 1; i <= NUM_NUMBERED_PIECES; i++) {
             const whitePieceId = this.nextPieceId++;
             whitePieces.push(new Piece(this.scene, this, 0xffffff, i, 0, 0, this.whiteUnenteredRack, whitePieceId));
+        }
+        const numWhiteUnnumberedPieces = TOTAL_PIECES - NUM_NUMBERED_PIECES;
+        for (let i = 0; i < numWhiteUnnumberedPieces; i++) {
+            const whitePieceId = this.nextPieceId++;
+            whitePieces.push(new Piece(this.scene, this, 0xffffff, 0, 0, 0, this.whiteUnenteredRack, whitePieceId));
+        }
+
+        // Create black pieces
+        for (let i = 1; i <= NUM_NUMBERED_PIECES; i++) {
             const blackPieceId = this.nextPieceId++;
             blackPieces.push(new Piece(this.scene, this, 0x000000, i, 0, 0, this.blackUnenteredRack, blackPieceId));
+        }
+        const numBlackUnnumberedPieces = TOTAL_PIECES - NUM_NUMBERED_PIECES;
+        for (let i = 0; i < numBlackUnnumberedPieces; i++) {
+            const blackPieceId = this.nextPieceId++;
+            blackPieces.push(new Piece(this.scene, this, 0x000000, 0, 0, 0, this.blackUnenteredRack, blackPieceId));
         }
 
         whitePieces = Phaser.Utils.Array.Shuffle(whitePieces);
@@ -1241,10 +1257,12 @@ class Game {
             
             
 
-            const dice = this.dice.filter(die => !die.used);
+            // const dice = this.dice.filter(die => !die.used); // Removed, as die marking is now handled by processMove
 
-            // check en route capture
-            if (dice.length > 1 && reachableBySum.includes(targetTile)) {
+            // check en route capture - This logic might need review if it depends on dice state that's now changing elsewhere.
+            // For now, assuming it's okay or will be addressed if further issues arise.
+            const availableDice = this.dice.filter(die => !die.used);
+            if (availableDice.length > 1 && reachableBySum.includes(targetTile)) { // Check if two dice were conceptually available for a sum move
                 this.checkEnRouteCapture(piece, targetTile);
             }
     
@@ -1256,15 +1274,16 @@ class Game {
             const homeTile = this.tiles.find(tile => tile.type === 'home');
             if (homeTile.pieces.includes(piece)) homeTile.removePiece(piece);
 
-            if (reachableByFirstDie.includes(targetTile)) {
-                dice[0].setUsed();
-            } else if (reachableBySecondDie.includes(targetTile)) {
-                dice[1].setUsed();
-            } else {
-
-                dice[0].setUsed();
-                if (dice.length > 1) dice[1].setUsed();
-            }
+            // Die usage is now handled by processMove based on dieRoll from server.
+            // Removed original die marking logic:
+            // if (reachableByFirstDie.includes(targetTile)) {
+            //     dice[0].setUsed();
+            // } else if (reachableBySecondDie.includes(targetTile)) {
+            //     dice[1].setUsed();
+            // } else {
+            //     dice[0].setUsed();
+            //     if (dice.length > 1) dice[1].setUsed();
+            // }
     
             if (!this.movedOnce) this.movedOnce = true;
 
@@ -2297,7 +2316,7 @@ function applyMove(move) {
                     game.switchTurn();
                 }
             } else if (game.movePiece(piece, targetTile, true)) {
-                console.log(`Piece ${pieceColorNumber[0]} ${pieceColorNumber[1]} moved to ring ${targetRingSector[0]}, sector ${targetRingSector[1]}`);
+                console.log(`Piece ${piece.player} ${piece.number} (id: ${pieceId}) moved to ring ${targetRingSector[0]}, sector ${targetRingSector[1]}`);
                 piece.reachableTiles = game.getReachableTilesByDice(piece); // Update reachable tiles
 
                 piece.isSelected = false;
@@ -2393,17 +2412,36 @@ function applyMovePair(movePair) {
             if (targetTile !== 'save') targetTile.highlight();
             setTimeout(() => {
                 if (targetTile === 'save') {
-                    piece.save();
-                    console.log(`Piece ${pieceColorNumber[0]} ${pieceColorNumber[1]} saved`);
+                    piece.save(); // This internally calls dieToUse.setUsed() in Piece.save based on its own logic
+                    console.log(`Piece ${piece.player} ${piece.number} (id: ${pieceId}) saved`);
+                    // For agent moves, if piece.save() handles its own die, this is fine.
+                    // If server sends a dieRoll for a save, and Piece.save() also marks a die, ensure no conflict.
+                    // The Piece.save() method already finds and sets the die used.
+                    // So, for 'save' target, we might not need to do anything extra here with dieRoll,
+                    // assuming Piece.save() correctly uses the die that corresponds to dieRoll.
+                    // However, the original instruction implies processMove should handle it.
+                    // Let's ensure Piece.save() doesn't conflict or remove its die setting logic if processMove handles it.
+                    // For now, let's assume Piece.save() is primary for saves, and dieRoll is for movement.
+                    // If targetTile is 'save', the Piece.save method should handle die usage.
+                    // The dieRoll from server for a save move should match the die used by Piece.save().
 
                     piece.isSelected = false;
                     piece.updateColor();
                     
                     callback();
-                } else if (game.movePiece(piece, targetTile, true)) {
+                } else if (game.movePiece(piece, targetTile, true)) { // This is for normal moves
                     console.log(`Piece ${piece.player} ${piece.number} (id: ${pieceId}) moved to ring ${targetRingSector[0]}, sector ${targetRingSector[1]}`);
-                    piece.reachableTiles = game.getReachableTilesByDice(piece); // Update reachable tiles
+                    
+                    // Mark the die used based on dieRoll from server
+                    if (dieRoll === game.dice[0].value && !game.dice[0].used) {
+                        game.dice[0].setUsed();
+                    } else if (dieRoll === game.dice[1].value && !game.dice[1].used) {
+                        game.dice[1].setUsed();
+                    } else if (dieRoll !== 0) { // dieRoll 0 for pass or saving opponent's piece
+                        console.warn(`Die for roll ${dieRoll} could not be marked as used, or was already used for move. Dice: D1 ${game.dice[0].value} (used ${game.dice[0].used}), D2 ${game.dice[1].value} (used ${game.dice[1].used})`);
+                    }
 
+                    piece.reachableTiles = game.getReachableTilesByDice(piece); // Update reachable tiles
                     piece.isSelected = false;
                     piece.updateColor();
                     targetTile.unhighlight();

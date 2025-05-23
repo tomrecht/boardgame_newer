@@ -116,13 +116,23 @@ class Board:
         return self.tile_map.get((ring, pos))
 
     def initialize_pieces(self):
+        NUM_NUMBERED_PIECES = 6  # Pieces numbered 1-6
         for player in self.players:
             pieces = []
-            for i in range(NUM_PIECES):
+            # Create numbered pieces (1-6)
+            for i in range(NUM_NUMBERED_PIECES):
                 piece_id = self.next_piece_id
                 self.next_piece_id += 1
                 pieces.append(Piece(player, i + 1, self, piece_id))
-            random.shuffle(pieces)  # Shuffle the pieces randomly
+            
+            # Create unnumbered pieces (number 0)
+            num_unnumbered_pieces = NUM_PIECES - NUM_NUMBERED_PIECES
+            for _ in range(num_unnumbered_pieces):
+                piece_id = self.next_piece_id
+                self.next_piece_id += 1
+                pieces.append(Piece(player, 0, self, piece_id)) # Number is 0
+
+            random.shuffle(pieces)  # Shuffle the entire mixed list
 
             if player == 'white':
                 self.white_unentered.extend(pieces)
@@ -419,8 +429,7 @@ class Board:
                         
                         if destination == 'save':
                             tuples_list.append((piece.id, destination, roll))
-                        elif mask_offgoals and piece.can_be_saved() and (piece.number <=6 or roll != 4 or destination.type != 'save'):
-                            continue   # don't include offgoal moves
+                        # The problematic elif block that was here has been removed.
                         else:
                             tuples_list.append((piece.id, (destination.ring, destination.pos), roll))
 
